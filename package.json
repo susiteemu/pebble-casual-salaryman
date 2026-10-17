@@ -1,0 +1,50 @@
+{
+  "name": "pebble-casual-salaryman",
+  "author": "MakeAwesomeHappen",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {
+    "@rebble/clay": "^1.1.0"
+  },
+  "pebble": {
+    "displayName": "Casual Salaryman",
+    "uuid": "a4a3365f-8b4c-4c89-bf92-8b92099a0b67",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": true
+    },
+    "capabilities": [
+      "configurable",
+      "location"
+    ],
+    "messageKeys": [
+      "ShowSeconds",
+      "ClockFormat",
+      "TemperatureUnit",
+      "FirstDayOfWeek",
+      "DateFormat",
+      "HideSecondsAtNight",
+      "NightStartHour",
+      "NightEndHour",
+      "TemperatureTenths",
+      "WeatherCondition"
+    ],
+    "resources": {
+      "media": [
+        {
+          "type": "font",
+          "name": "FONT_BRAND_12",
+          "file": "fonts/Orbitron-Black.ttf",
+          "characterRegex": "[A-Z]"
+        }
+      ]
+    }
+  }
+}
