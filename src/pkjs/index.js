@@ -2,8 +2,6 @@ var Clay = require('@rebble/clay');
 var clayConfig = require('./config');
 var clay = new Clay(clayConfig);
 
-var WEATHER_REFRESH_MS = 30 * 60 * 1000; // 30 minutes
-
 // The temperature goes to the watch in tenths of a degree Celsius; the watch
 // converts it to the unit picked in settings, so switching units needs no
 // refetch.
@@ -54,7 +52,15 @@ function updateWeather() {
   );
 }
 
+// Fetch once when the JS starts; after that the watch asks for a refresh every
+// 30 minutes. The watch drives the schedule because a phone may suspend this JS
+// in the background, which would silently stop a timer here.
 Pebble.addEventListener('ready', function() {
   updateWeather();
-  setInterval(updateWeather, WEATHER_REFRESH_MS);
+});
+
+Pebble.addEventListener('appmessage', function(e) {
+  if (e.payload.RequestWeather) {
+    updateWeather();
+  }
 });

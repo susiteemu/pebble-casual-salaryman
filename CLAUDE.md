@@ -35,11 +35,11 @@ Layout constants:
 - `ROW_MIDDLE_Y (70)`: Main time/date/week display
 - `ROW_BOTTOM_Y (173)`: Black band with TEMP and ALARM LCD windows
 
-Settings persistence uses `persist_read_data`/`persist_write_data` with key `1` for `ClaySettings` struct. Add new fields only at the end of the struct, so older saved copies still load (missing fields keep their defaults).
+Settings persistence uses `persist_read_data`/`persist_write_data` with key `1` for `ClaySettings` struct; key `2` holds the last weather reading and its arrival time (`SavedWeather`), blanked after 3 h. Add new fields only at the end of the struct, so older saved copies still load (missing fields keep their defaults).
 
 ### JavaScript Phone-Side (`src/pkjs/`)
 
-- `index.js`: Clay settings init, weather fetching from Open-Meteo API (30-min refresh), geolocation
+- `index.js`: Clay settings init, weather fetching from Open-Meteo API, geolocation. Fetches on JS ready and whenever the watch sends `RequestWeather` (every 30 min, driven by the watch's minute tick)
 - `config.js`: Clay settings schema (clock format, show seconds, hide seconds at night + hours, date format, first day of week, temperature unit)
 
 ### Message Keys
@@ -54,6 +54,7 @@ Communication between watch and phone uses these keys (defined in package.json):
 - `NightStartHour` / `NightEndHour` - "0".."23"; the range wraps past midnight (22-7 = 22:00-06:59)
 - `TemperatureTenths` - weather temperature in tenths of a degree Celsius (the watch converts to the chosen unit)
 - `WeatherCondition` - WMO weather code
+- `RequestWeather` - watch → phone: fetch weather now
 
 Test settings without the config page: `pebble send-app-message --emulator emery --string <key id>=<value>`, with numeric key ids from `build/js/message_keys.json`.
 

@@ -46,7 +46,6 @@ static Layer *s_date_layer;
 static Layer *s_time_big_layer;
 static TextLayer *s_ampm_layer;
 static Layer *s_time_sec_layer;
-static TextLayer *s_alarm_label_layer;
 static Layer *s_alarm_value_layer;
 static Layer *s_bottom_band_layer;
 static Layer *s_weather_temp_layer;
@@ -68,6 +67,19 @@ static int s_today_index = 0; // 0=Mon .. 6=Sun
 // Current temperature in tenths of a degree Celsius, as sent by the phone.
 #define WEATHER_TEMP_NONE INT16_MIN
 static int s_weather_temp = WEATHER_TEMP_NONE;
+
+// The last reading is persisted with its arrival time, so reopening the
+// watchface shows it right away. The watch asks the phone for a new one every
+// WEATHER_REFRESH_S, and blanks a reading older than WEATHER_MAX_AGE_S.
+#define WEATHER_KEY 2
+#define WEATHER_REFRESH_S (30 * 60)
+#define WEATHER_MAX_AGE_S (3 * 60 * 60)
+typedef struct SavedWeather {
+  int32_t temp_tenths;
+  int32_t time;
+} SavedWeather;
+static time_t s_weather_time;
+static time_t s_weather_requested;
 static int s_weather_condition = -1; // WMO weather code, -1 = unknown/no data
 
 // Y coordinate where each row starts. Every layer below is positioned as
@@ -188,6 +200,46 @@ static void prv_load_settings(void) {
   persist_read_data(SETTINGS_KEY, &s_settings, sizeof(s_settings));
 }
 
+static void prv_load_weather(void) {
+  SavedWeather saved;
+  if (persist_read_data(WEATHER_KEY, &saved, sizeof(saved)) == sizeof(saved)) {
+    s_weather_temp = saved.temp_tenths;
+    s_weather_time = saved.time;
+  }
+}
+
+static void prv_save_weather(void) {
+  SavedWeather saved = {s_weather_temp, s_weather_time};
+  persist_write_data(WEATHER_KEY, &saved, sizeof(saved));
+}
+
+// Runs once a minute: blanks a reading too old to trust, and asks the phone
+// for a new one when it's due. A clock set backwards (now before the last
+// reading or request) counts as due, rather than waiting for the clock to
+// catch up.
+static void prv_check_weather(time_t now) {
+  if (s_weather_temp != WEATHER_TEMP_NONE &&
+      now - s_weather_time > WEATHER_MAX_AGE_S) {
+    s_weather_temp = WEATHER_TEMP_NONE;
+    layer_mark_dirty(s_weather_temp_layer);
+  }
+
+  time_t last = s_weather_time > s_weather_requested ? s_weather_time
+                                                     : s_weather_requested;
+  if ((now >= last && now - last < WEATHER_REFRESH_S) ||
+      !connection_service_peek_pebble_app_connection()) {
+    return;
+  }
+  DictionaryIterator *iter;
+  if (app_message_outbox_begin(&iter) != APP_MSG_OK) {
+    return;
+  }
+  dict_write_uint8(iter, MESSAGE_KEY_RequestWeather, 1);
+  if (app_message_outbox_send() == APP_MSG_OK) {
+    s_weather_requested = now;
+  }
+}
+
 static void prv_tick_handler(struct tm *tick_time, TimeUnits units_changed);
 
 // Subscribes to per-second or per-minute ticks, whichever `t` calls for.
@@ -204,16 +256,30 @@ static void prv_update_tick_subscription(const struct tm *t) {
                                prv_tick_handler);
 }
 
-// Monday-anchored approximation of the ISO-8601 week number. Skips the
-// leap-year-aware boundary math needed for full ISO correctness around
-// week 1/52/53, since this is a glance-once-a-week display value.
+// Weekday of December 31st of `year`, 0=Sun..6=Sat.
+static int prv_dec31_weekday(int year) {
+  return (year + year / 4 - year / 100 + year / 400) % 7;
+}
+
+// 53 when the year ends on a Thursday, or the year before ends on a Wednesday
+// (i.e. the year starts on a Thursday); 52 otherwise.
+static int prv_iso_weeks_in_year(int year) {
+  return (prv_dec31_weekday(year) == 4 || prv_dec31_weekday(year - 1) == 3)
+             ? 53
+             : 52;
+}
+
+// ISO-8601 week number: weeks start on Monday, and week 1 is the one holding
+// the year's first Thursday. Early January days can belong to the previous
+// year's last week (52 or 53), late December days to next year's week 1.
 static int prv_iso_week_number(struct tm *tick_time) {
   int wday = tick_time->tm_wday; // 0=Sun..6=Sat
   int dow_mon0 = (wday == 0) ? 6 : wday - 1;
+  int year = tick_time->tm_year + 1900;
   int week = (tick_time->tm_yday - dow_mon0 + 10) / 7;
   if (week < 1) {
-    week = 52;
-  } else if (week > 52) {
+    week = prv_iso_weeks_in_year(year - 1);
+  } else if (week > prv_iso_weeks_in_year(year)) {
     week = 1;
   }
   return week;
@@ -270,6 +336,10 @@ static void prv_tick_handler(struct tm *tick_time, TimeUnits units_changed) {
   if ((units_changed & MINUTE_UNIT) &&
       prv_seconds_wanted(tick_time) != s_seconds_ticking) {
     prv_update_tick_subscription(tick_time);
+  }
+
+  if (units_changed & MINUTE_UNIT) {
+    prv_check_weather(time(NULL));
   }
 
   prv_update_time_display(tick_time);
@@ -1075,6 +1145,8 @@ static void prv_inbox_received_callback(DictionaryIterator *iterator,
   Tuple *temperature_t = dict_find(iterator, MESSAGE_KEY_TemperatureTenths);
   if (temperature_t) {
     s_weather_temp = prv_tuple_get_int(temperature_t);
+    s_weather_time = time(NULL);
+    prv_save_weather();
     layer_mark_dirty(s_weather_temp_layer);
   }
 
@@ -1226,6 +1298,12 @@ static void prv_window_load(Window *window) {
   prv_refresh_alarm();
 
   time_t now = time(NULL);
+  // The phone fetches weather as soon as its JS starts, so the first request
+  // from the watch is only due WEATHER_REFRESH_S from now. This call just
+  // blanks a saved reading that is too old.
+  s_weather_requested = now;
+  prv_check_weather(now);
+
   struct tm *tick_time = localtime(&now);
   s_last_mday = tick_time->tm_mday;
   prv_update_tick_subscription(tick_time);
@@ -1250,7 +1328,6 @@ static void prv_window_unload(Window *window) {
   layer_destroy(s_time_big_layer);
   text_layer_destroy(s_ampm_layer);
   layer_destroy(s_time_sec_layer);
-  text_layer_destroy(s_alarm_label_layer);
   layer_destroy(s_alarm_value_layer);
   layer_destroy(s_bottom_band_layer);
   layer_destroy(s_weather_temp_layer);
@@ -1261,9 +1338,10 @@ static void prv_window_unload(Window *window) {
 
 static void prv_init(void) {
   prv_load_settings();
+  prv_load_weather();
 
   app_message_register_inbox_received(prv_inbox_received_callback);
-  app_message_open(256, 256);
+  app_message_open(256, 64);
 
   s_window = window_create();
   window_set_background_color(s_window, GColorWhite);

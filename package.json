@@ -1,7 +1,7 @@
 {
   "name": "pebble-casual-salaryman",
   "author": "Teemu Turunen",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "keywords": [
     "pebble-app"
   ],
@@ -34,7 +34,8 @@
       "NightStartHour",
       "NightEndHour",
       "TemperatureTenths",
-      "WeatherCondition"
+      "WeatherCondition",
+      "RequestWeather"
     ],
     "resources": {
       "media": [
